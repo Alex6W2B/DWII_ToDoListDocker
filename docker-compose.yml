@@ -1,0 +1,78 @@
+services:
+  app1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: app1
+    environment:
+      - PORT=5000
+    volumes:
+      - ./data:/app/db
+    depends_on:
+      cert-generator:
+        condition: service_healthy # Só inicia após o certificado estar pronto
+  app2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: app2
+    environment:
+      - PORT=5001
+    volumes:
+      - ./data:/app/db
+    depends_on:
+      cert-generator:
+        condition: service_healthy # Só inicia após o certificado estar pronto
+  app3:
+    image: busybox:latest
+    container_name: app3
+    volumes:
+      - ./backup:/var/www
+    command: ["httpd", "-f", "-p", "3000", "-h", "/var/www"]
+    depends_on:
+      cert-generator:
+        condition: service_healthy # Só inicia após o certificado estar pronto
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/letsencrypt
+    ports:
+      - "80:80" # Mapeia para 8080 no Windows/WSL
+      - "443:443" # Mapeia para 8443 no Windows/WSL
+    depends_on:
+      app1:
+        condition: service_started
+      app2:
+        condition: service_started
+      app3:
+        condition: service_started
+      cert-generator:
+        condition: service_healthy # Só inicia após o certificado estar pronto
+  cert-generator:
+    image: alpine:latest
+    container_name: cert-generator
+    volumes:
+      - ./certs:/etc/letsencrypt
+    command: >
+      /bin/sh -c "
+        apk add openssl &&
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/letsencrypt/privkey.pem -out /etc/letsencrypt/fullchain.pem -subj '/CN=localhost' &&
+        chown -R 101:101 /etc/letsencrypt &&
+        tail -f /dev/null # Mantém o container ativo após gerar os certificados
+      "
+    healthcheck:
+      test: ["CMD", "test", "-f", "/etc/letsencrypt/fullchain.pem"] # Verifica se o certificado foi gerado
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+# Serviço temporário para gerar certificados com Certbot
+  # certbot:
+  #   image: certbot/certbot:latest # Imagem oficial do Certbot
+  #   volumes:
+  #     - ./certs:/etc/letsencrypt # Armazena os certificados no diretório ./certs do host
+  #   entrypoint: /bin/sh # Substitui o entrypoint padrão para rodar comandos manuais
+  #   command: -c "certbot certonly --standalone -d example.com -d www.example.com --email fabricio.bizotto@gmail.com --agree-tos --no-eff-email"
+# Comando para gerar certificados no modo standalone (substitua example.com e seuemail@example.com)
